@@ -1,0 +1,191 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════════
+  # BUILD — vendor (sem dev) + assets, e envia as imagens para o GHCR
+  # ═══════════════════════════════════════════════════════════════════
+
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name (lowercase)
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+          coverage: none
+
+      - name: Cache vendor
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-nodev-${{ hashFiles('composer.lock') }}
+
+      - name: Install PHP dependencies (production)
+        run: composer install --no-dev --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --optimize-autoloader
+
+      - name: Setup .env (needed for artisan / wayfinder during build)
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          # o wayfinder pode inspecionar o banco; um SQLite descartável basta (não vai para a imagem)
+          touch database/database.sqlite
+          php artisan migrate --force
+
+      - name: Generate Wayfinder routes/actions
+        run: php artisan wayfinder:generate --with-form
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build assets
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Remove build-only files
+        run: rm -f .env bootstrap/cache/*.php database/database.sqlite
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push PHP-FPM
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./.docker/php-fpm/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}/php-fpm:prod-latest
+            ${{ env.IMAGE }}/php-fpm:prod-${{ github.run_id }}
+
+      - name: Build and push Nginx
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./.docker/nginx/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}/nginx:prod-latest
+            ${{ env.IMAGE }}/nginx:prod-${{ github.run_id }}
+
+  # ═══════════════════════════════════════════════════════════════════
+  # DEPLOY — copia o compose.yml para o VPS, baixa as imagens e sobe
+  # ═══════════════════════════════════════════════════════════════════
+
+  deploy:
+    name: Deploy (Production)
+    runs-on: ubuntu-latest
+    needs: [build]
+    environment:
+      name: production
+      url: https://sell.areio.com.br
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy compose.yml to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: compose.yml
+          target: /dockerlabs/sell
+
+      - name: Pull images and restart containers
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: GHCR_TOKEN,GHCR_ACTOR,REGISTRY_IMAGE
+          script: |
+            set -e
+            PROJECT_DIR=/dockerlabs/sell
+            export REGISTRY_IMAGE=$(echo "$REGISTRY_IMAGE" | tr '[:upper:]' '[:lower:]')
+
+            echo "Autenticando no GHCR..."
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+
+            echo "Baixando imagens..."
+            docker compose -f $PROJECT_DIR/compose.yml pull
+
+            docker logout ghcr.io
+
+            echo "Subindo containers..."
+            docker compose -f $PROJECT_DIR/compose.yml up -d --force-recreate --remove-orphans
+
+            echo "Migrações e cache..."
+            docker exec sell-fpm php artisan migrate --force
+            docker exec sell-fpm php artisan optimize
+
+            docker image prune -f
+
+  # ═══════════════════════════════════════════════════════════════════
+  # CLEANUP — mantém só as últimas versões das imagens no GHCR
+  # ═══════════════════════════════════════════════════════════════════
+
+  cleanup:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    permissions:
+      packages: write
+
+    steps:
+      - name: Delete old php-fpm versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}/php-fpm
+          package-type: container
+          min-versions-to-keep: 5
+          ignore-versions: '^prod-latest$'
+
+      - name: Delete old nginx versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}/nginx
+          package-type: container
+          min-versions-to-keep: 5
+          ignore-versions: '^prod-latest$'

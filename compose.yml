@@ -1,0 +1,58 @@
+# Produção — https://sell.areio.com.br
+# No VPS: /dockerlabs/sell/compose.yml (copiado automaticamente pelo GitHub Actions)
+
+name: sell
+
+services:
+  fpm:
+    container_name: sell-fpm
+    hostname: sell-fpm
+    image: ${REGISTRY_IMAGE:-ghcr.io/dianodev/sell}/php-fpm:prod-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - TZ=America/Cuiaba
+    env_file:
+      - /dockerlabs/sell/.env
+    volumes:
+      - /dockerlabs/sell/storage:/var/www/html/storage:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - internal
+      - shared-prod   # mesma rede que o web-ftv (prod) usa para alcançar serviços compartilhados (ex.: banco)
+
+  nginx:
+    container_name: sell-nginx
+    hostname: sell-nginx
+    image: ${REGISTRY_IMAGE:-ghcr.io/dianodev/sell}/nginx:prod-${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - TZ=America/Cuiaba
+    volumes:
+      - /dockerlabs/sell/storage/app/public:/var/www/html/storage/app/public:ro
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.sell-prod.rule=Host(`sell.areio.com.br`)"
+      - "traefik.http.routers.sell-prod.entrypoints=websecure"
+      - "traefik.http.routers.sell-prod.tls=true"
+      - "traefik.http.routers.sell-prod.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sell-prod.loadbalancer.server.port=8080"
+    depends_on:
+      fpm:
+        condition: service_started
+
+networks:
+  # Nomes explícitos: evita o prefixo automático do Compose (o problema que o web-ftv tem hoje)
+  internal:
+    name: sell-internal
+    driver: bridge
+  proxy:
+    name: proxy
+    external: true
+  shared-prod:
+    name: shared-prod
+    external: true
