@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import AppContent from '@/components/AppContent.vue';
 import AppShell from '@/components/AppShell.vue';
+import ConfirmationPopup from '@/components/ConfirmationPopup.vue';
+import Popup from '@/components/Popup.vue';
 import AppSidebar from '@/components/AppSidebar.vue';
 import AppSidebarHeader from '@/components/AppSidebarHeader.vue';
 import { Toaster } from '@/components/ui/sonner';
@@ -23,5 +25,7 @@ withDefaults(defineProps<Props>(), {
             <slot />
         </AppContent>
         <Toaster />
+        <Popup />
+        <ConfirmationPopup />
     </AppShell>
 </template>

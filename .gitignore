@@ -28,8 +28,8 @@ yarn-error.log
 /.vscode
 /.zed
 /.agents
-/.amp
-/.claude
+/.amps
+/.claude/ettings.local.json
 /.codex
 /.cursor
 /.factory
