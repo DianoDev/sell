@@ -166,6 +166,41 @@ O sistema é de uso individual: não há `workspaces` nem separação por client
 | ------------------- | ------------------------------------------------------------------------------ |
 | `compliance_checks` | Resultado da checagem de um criativo ou página contra as políticas de uma rede |
 
+**Configuração e sistema**
+
+| Tabela          | Conteúdo                                                                                       |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `settings`      | Configuração geral em chave e valor, por grupo, com tipo e marcação de valor criptografado     |
+| `notifications` | Alertas do sistema (anúncio reprovado, token expirando), no formato de notificações do Laravel |
+| `users`         | Ganhou `is_admin`, que libera a área de administração                                          |
+
+### Convenções das migrations
+
+- **Dinheiro em micros** (inteiro, 1 unidade = 1.000.000): `cost_micros`, `amount_micros`, `commission_micros`. Evita erro de arredondamento e é o formato do Google Ads. `amount_micros` aceita negativo para reembolso e chargeback.
+- **Valores fechados em `string`**, validados no código por enum, para não precisar de migration a cada valor novo:
+
+| Coluna                           | Valores                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `platform_connections.category`  | `ads`, `affiliate`, `ai`                                                                                     |
+| `platform_connections.platform`  | `google_ads`, `microsoft_ads`, `meta_ads`, `tiktok_ads`, `digistore24`, `creatify`, `arcads`                 |
+| `platform_connections.status`    | `pending`, `active`, `expired`, `error`, `disabled`                                                          |
+| `ad_entities.level`              | `campaign`, `ad_group`, `ad`, `keyword`                                                                      |
+| `conversions.event`              | `sale`, `rebill`, `refund`, `chargeback`                                                                     |
+| `webhook_events.status`          | `pending`, `processed`, `failed`, `ignored`                                                                  |
+| `conversion_uploads.status`      | `pending`, `uploaded`, `failed`, `skipped`                                                                   |
+| `sync_runs.status`               | `running`, `completed`, `failed`                                                                             |
+| `presell_pages.type` / `.status` | `advertorial`, `quiz` / `draft`, `published`, `archived`                                                     |
+| `video_projects.status`          | `draft`, `generating`, `assembling`, `completed`, `failed`                                                   |
+| `video_generations.status`       | `queued`, `processing`, `completed`, `failed`                                                                |
+| `media_assets.kind`              | `video`, `image`, `audio`                                                                                    |
+| `compliance_checks.status`       | `passed`, `warning`, `failed`                                                                                |
+| `settings.type`                  | `string`, `integer`, `boolean`, `json`                                                                       |
+
+- **Idempotência no banco**, não só no código: `webhook_events (source, external_id)`, `conversions (network, external_transaction_id, event)`, `ad_metrics_daily (ad_entity_id, date)`, `conversion_uploads (conversion_id, platform_connection_id)`.
+- **Histórico preservado**: clique e conversão sobrevivem à exclusão da página, da oferta ou da conexão (chave estrangeira vira nula). Conexão com gerações de vídeo não pode ser apagada de vez, para não perder o custo registrado.
+- **Exclusão lógica** em `platform_connections`, `offers`, `presell_pages`, `video_projects` e `media_assets`.
+- **Segredos**: `platform_connections.credentials` é texto para receber o cast `encrypted`; `settings.is_encrypted` marca os valores que seguem a mesma regra.
+
 ### Como o ROI é calculado sem custo por clique
 
 1. A URL do anúncio carrega os ids da própria rede por macro (`{campaignid}`, `{adgroupid}`, `{creative}`, `{keyword}` no Google; equivalentes nas outras).
@@ -271,3 +306,4 @@ As contas e os tokens de Google, Microsoft, Meta e TikTok serão criados por voc
 | 2026-11-12 | Starter kit já instalado (Laravel 13, Inertia/Vue, Fortify). Git configurado para o repositório. Este documento criado para validação. |
 | 2026-11-12 | Escopo validado: uso individual, Creatify/Arcads para vídeo, pastas e dependências aprovadas, hospedagem em VPS Hostinger.             |
 | 2026-11-12 | Padrão de desenvolvimento: skills próprias em `.claude/skills` (`datatable`, `popup-form`, `inertia-crud`, `auth-autorizacao`, `seguranca`) e componentes base do painel (DataTable, Popup, ConfirmationPopup, PopupButton, SortableList). `.claude` passou a ser versionado. |
+| 2026-11-12 | Base de dados: 20 migrations cobrindo todas as tabelas da seção 5. Módulo admin com cadastro de usuários em `/admin/users` (gate `access-admin`, senha confirmada). Página inicial nova. |
